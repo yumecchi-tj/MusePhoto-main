@@ -844,6 +844,7 @@ struct PhotoDraftCardView: View {
 struct CameraInfoModalView: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var cameraInfo: CameraInfo
+    private let sheetBackground = Color(red: 0.95, green: 0.89, blue: 0.86)
 
     var body: some View {
         NavigationStack {
@@ -860,6 +861,7 @@ struct CameraInfoModalView: View {
                 }
                 .padding(16)
             }
+            .background(sheetBackground.ignoresSafeArea())
             .navigationTitle("カメラ情報入力")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -870,6 +872,7 @@ struct CameraInfoModalView: View {
                 }
             }
         }
+        .preferredColorScheme(.light)
     }
 }
 
@@ -883,7 +886,10 @@ struct CameraInfoInputRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(label)
                 .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.black.opacity(0.82))
             TextField(placeholder, text: $text)
+                .foregroundStyle(.black)
+                .tint(Color(red: 0.35, green: 0.16, blue: 0.05))
                 .padding(.horizontal, 12)
                 .frame(height: 44)
                 .background(Color.white)

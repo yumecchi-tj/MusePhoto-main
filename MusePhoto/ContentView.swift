@@ -33,6 +33,7 @@ struct ContentView: View {
     @Query(sort: \ExhibitionRecord.publishedAt, order: .reverse) private var records: [ExhibitionRecord]
 
     @State private var isShowingAddExhibitionView = false
+    @State private var addExhibitionFlowID = UUID()
     @State private var selectedTicket: ExhibitionTicket?
     @State private var showTicketOverlay = false
     @State private var showExhibitionPublishedMessage = false
@@ -69,7 +70,7 @@ struct ContentView: View {
                             VStack(alignment: .leading, spacing: 22) {
                                 // チケットの初期位置を画面の下半分に置くための余白です。
                                 Color.clear
-                                    .frame(height: proxy.size.height * 0.39)
+                                    .frame(height: proxy.size.height * 0.42)
 
                                 if !ticketsFromRecords().isEmpty {
                                     ActiveExhibitionsHeader()
@@ -95,26 +96,41 @@ struct ContentView: View {
                             // 下にも余白を作ると、チケットを上方向へスライドしやすくなります。
                             .padding(.bottom, proxy.size.height * 0.42)
                         }
-                        .blur(radius: showTicketOverlay ? 7 : 0)
-                        .animation(.easeInOut(duration: 0.25), value: showTicketOverlay)
                     }
 
                     VStack {
-                        HStack(alignment: .center) {
-                            Text(museumTitle)
-                                .font(.system(size: 34, weight: .regular, design: .serif))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
+                        ZStack(alignment: .topLeading) {
+                            // スクロールしたチケットが上に重なっても、タイトルが背景に溶けないようにします。
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.46),
+                                    Color.black.opacity(0.18),
+                                    Color.clear
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 150)
+                            .ignoresSafeArea(edges: .top)
 
-                            Spacer()
+                            HStack(alignment: .center) {
+                                Text(museumTitle)
+                                    .font(.system(size: 34, weight: .regular, design: .serif))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.75)
+                                    .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+
+                                Spacer()
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.top, 26)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 26)
 
                         Spacer()
                     }
                     .allowsHitTesting(false)
+                    .zIndex(10)
                 }
                 .opacity(hideHomeContentDuringEntrance ? 0 : 1)
                 .animation(.easeInOut(duration: 0.2), value: hideHomeContentDuringEntrance)
@@ -147,15 +163,12 @@ struct ContentView: View {
                                 photos: photos,
                                 backgroundImageName: backgroundImageName
                             )
-                            // 保存できたことを知らせてから、ホーム画面へ戻します。
+                            // 保存できたことを知らせてから、My Museum画面へ戻します。
                             withAnimation(.easeInOut(duration: 0.25)) {
                                 showExhibitionPublishedMessage = true
                             }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                withAnimation(.easeInOut(duration: 0.35)) {
-                                    isShowingAddExhibitionView = false
-                                    showExhibitionPublishedMessage = false
-                                }
+                                finishAddExhibitionFlow()
                             }
                         }
                         .overlay {
@@ -176,14 +189,12 @@ struct ContentView: View {
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button("閉じる") {
-                                    withAnimation(.easeInOut(duration: 0.35)) {
-                                        showExhibitionPublishedMessage = false
-                                        isShowingAddExhibitionView = false
-                                    }
+                                    finishAddExhibitionFlow()
                                 }
                             }
                         }
                     }
+                    .id(addExhibitionFlowID)
                     .transition(.opacity)
                     .zIndex(2)
                 }
@@ -249,68 +260,45 @@ struct ContentView: View {
         hideHomeContentDuringEntrance = false
     }
 
+    /// 展示作成画面を閉じて、My Museum画面へ確実に戻します。
+    private func finishAddExhibitionFlow() {
+        withAnimation(.easeInOut(duration: 0.35)) {
+            showExhibitionPublishedMessage = false
+            isShowingAddExhibitionView = false
+        }
+
+        // 次に展示作成を開いたとき、前回の奥の画面が残らないように作り直します。
+        addExhibitionFlowID = UUID()
+    }
+
     /// チケットを破る演出を順番に再生し、完了したら展示説明へ進みます。
     private func playTicketCutAnimation() {
-        // phase 1: チケット全体がほんの少し下に沈み、紙に力がかかる感じを出します。
+        // phase 1: チケット全体を少し沈ませます。最初の反応だけを見せます。
         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
             animationPhase = 1
         }
         
-        // phase 2: すぐ切らず、ミシン目に沿って柔らかく溜めます。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                animationPhase = 2
-            }
-            withAnimation(.easeInOut(duration: 0.12)) {
-                seamShift = -1.4
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                withAnimation(.easeInOut(duration: 0.12)) {
-                    seamShift = 1.4
-                }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
-                withAnimation(.easeInOut(duration: 0.1)) {
-                    seamShift = 0
-                }
-            }
-        }
-        
-        // phase 3: 右側の半券がミシン目から少しだけ離れます。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.54) {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+        // phase 3: 細かい揺れは入れず、右側の半券を一気に切り離します。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+            withAnimation(.spring(response: 0.46, dampingFraction: 0.9)) {
                 animationPhase = 3
             }
         }
-        
-        // phase 4: 右側の半券が少しだけ浮き、すぐ暗くなり始めます。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.82) {
-            withAnimation(.spring(response: 0.46, dampingFraction: 0.9)) {
-                animationPhase = 4
-            }
-        }
 
-        // phase 5: フラフラさせず、右へ少し流しながら暗くフェードアウトします。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.16) {
-            withAnimation(.easeOut(duration: 0.42)) {
-                animationPhase = 5
-            }
-        }
-
-        // phase 6: 最後は位置をほぼ保ったまま、画面から静かに消します。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.48) {
-            withAnimation(.easeOut(duration: 0.3)) {
+        // phase 6: 左右の半券をまとめてフェードアウトします。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) {
+            withAnimation(.easeOut(duration: 0.22)) {
                 animationPhase = 6
             }
         }
 
         // 破れ演出が終わったらチケット本体を完全に消します。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.66) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.82) {
             ticketVisible = false
         }
 
         // チケットが消えた直後に暗転へ入り、間延びしないようにします。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.84) {
             // 暗転開始時点でチケット関連UIを確実に隠します
             showTicketOverlay = false
             seamShift = 0
@@ -412,6 +400,7 @@ struct ContentView: View {
             photosData: photosData
         )
         modelContext.insert(record)
+        try? modelContext.save()
     }
 
     /// SwiftData保存データを画面表示用データへ変換します。
@@ -551,19 +540,18 @@ struct ExhibitionEntranceOverlay: View {
                 .opacity(darkOverlayOpacity(phase: phase))
                 .ignoresSafeArea()
             
-            // 中央の柔らかい光。phase 3 で円形に広がる
-            RadialGradient(
-                colors: [
-                    Color.white.opacity(0.72),
-                    Color.white.opacity(0.24),
-                    Color.clear
-                ],
-                center: .center,
-                startRadius: 0,
-                endRadius: 820 * revealProgress
-            )
-            .blendMode(.screen)
-            .ignoresSafeArea()
+            // 中央の白い光です。軽い円を2枚重ねて、前の柔らかい広がりに近づけます。
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(width: 360, height: 360)
+                    .scaleEffect(0.8 + revealProgress * 3.8)
+
+                Circle()
+                    .fill(Color.white.opacity(0.52))
+                    .frame(width: 190, height: 190)
+                    .scaleEffect(0.9 + revealProgress * 5.4)
+            }
             .opacity(lightOpacity(phase: phase))
             
             // 全体を白で包む層。phase4で最大化し、phase5で晴れる
@@ -657,57 +645,39 @@ struct TicketCutAnimationView: View {
 
             ZStack {
                 // 左側チケット片
-                TicketView(ticket: ticket)
+                TicketView(
+                    ticket: ticket,
+                    usesPaperTexture: false,
+                    shadowOpacity: 0.025,
+                    shadowRadius: 3,
+                    shadowYOffset: 2
+                )
                     .frame(width: width, height: proxy.size.height)
                     .mask(alignment: .leading) {
                         Rectangle().frame(width: splitX)
                     }
                     .offset(x: leftState.x, y: leftState.y)
                     .rotationEffect(.degrees(leftState.zRotation))
-                    .rotation3DEffect(.degrees(leftState.x3D), axis: (x: 1, y: 0, z: 0))
-                    .rotation3DEffect(.degrees(leftState.y3D), axis: (x: 0, y: 1, z: 0))
                     .scaleEffect(leftState.scale)
                     .opacity(leftState.opacity)
 
                 // 右側チケット片
-                TicketView(ticket: ticket)
+                TicketView(
+                    ticket: ticket,
+                    usesPaperTexture: false,
+                    shadowOpacity: 0.025,
+                    shadowRadius: 3,
+                    shadowYOffset: 2
+                )
                     .frame(width: width, height: proxy.size.height)
                     .mask(alignment: .trailing) {
                         Rectangle().frame(width: width - splitX)
                     }
                     .offset(x: rightState.x, y: rightState.y)
                     .rotationEffect(.degrees(rightState.zRotation))
-                    .rotation3DEffect(.degrees(rightState.x3D), axis: (x: 1, y: 0, z: 0))
-                    .rotation3DEffect(.degrees(rightState.y3D), axis: (x: 0, y: 1, z: 0))
                     .scaleEffect(rightState.scale)
                     .opacity(rightState.opacity)
 
-                // 破れ目に出る紙くずの粒
-                TicketPaperParticleView(isActive: animationPhase >= 3, splitX: splitX + seamShift)
-
-                // phase 2: ミシン目に沿って、切れ目が入る直前の細い光を出します。
-                if animationPhase == 2 {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.62))
-                        .frame(width: 1.5, height: proxy.size.height * 0.76)
-                        .overlay {
-                            Rectangle()
-                                .stroke(style: StrokeStyle(lineWidth: 1.2, dash: [4, 4]))
-                                .foregroundStyle(Color.black.opacity(0.35))
-                        }
-                        .offset(x: seamShift)
-                        .position(x: splitX, y: proxy.size.height * 0.5)
-                }
-
-                // phase 3〜5: 半券が離れていく間、ミシン目を細く光らせます。
-                if (3...5).contains(animationPhase) {
-                    Rectangle()
-                        .fill(Color.white.opacity(animationPhase == 3 ? 0.5 : 0.28))
-                        .frame(width: 1.2, height: proxy.size.height * 0.78)
-                        .offset(x: seamShift)
-                        .position(x: splitX, y: proxy.size.height * 0.5)
-                        .blur(radius: 0.25)
-                }
             }
         }
     }
@@ -720,7 +690,7 @@ struct TicketCutAnimationView: View {
         case 2:
             return .init(x: -3, y: 0, zRotation: -0.8, x3D: 0, y3D: 0, scale: 1, opacity: 1)
         case 3:
-            return .init(x: -5, y: -1, zRotation: -1.4, x3D: 0, y3D: 0, scale: 1, opacity: 1)
+            return .init(x: -4, y: 0, zRotation: -1.0, x3D: 0, y3D: 0, scale: 1, opacity: 1)
         case 4:
             return .init(x: -4, y: 0, zRotation: -1.0, x3D: 0, y3D: 0, scale: 1, opacity: 0.92)
         case 5:
@@ -740,7 +710,7 @@ struct TicketCutAnimationView: View {
         case 2:
             return .init(x: 6, y: 0, zRotation: 0.8, x3D: 0, y3D: 2, scale: 1, opacity: 1)
         case 3:
-            return .init(x: 24, y: -4, zRotation: 2.2, x3D: -1, y3D: 3, scale: 1, opacity: 1)
+            return .init(x: 58, y: -5, zRotation: 3.2, x3D: 0, y3D: 0, scale: 1, opacity: 0.92)
         case 4:
             return .init(x: 58, y: -7, zRotation: 3.8, x3D: -1, y3D: 4, scale: 0.998, opacity: 0.82)
         case 5:
@@ -902,6 +872,11 @@ struct ExhibitionPreviewView: View {
 /// 写真展のチケット見た目を表示します。
 struct TicketView: View {
     let ticket: ExhibitionTicket
+    var usesPaperTexture = true
+    var shadowOpacity: CGFloat = 0.08
+    var shadowRadius: CGFloat = 8
+    var shadowYOffset: CGFloat = 4
+
     private let ticketPaperColor = Color(red: 0.95, green: 0.94, blue: 0.90)
     private let ticketInkColor = Color(red: 0.27, green: 0.25, blue: 0.21)
 
@@ -917,9 +892,11 @@ struct TicketView: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .background(ticketPaperColor)
             .overlay {
-                TicketPaperTexture()
-                    .clipShape(TicketShape(cornerRadius: 10, sideNotchRadius: 16))
-                    .allowsHitTesting(false)
+                if usesPaperTexture {
+                    TicketPaperTexture()
+                        .clipShape(TicketShape(cornerRadius: 10, sideNotchRadius: 16))
+                        .allowsHitTesting(false)
+                }
             }
             .clipShape(TicketShape(cornerRadius: 10, sideNotchRadius: 16))
             .overlay(
@@ -933,7 +910,7 @@ struct TicketView: View {
             .compositingGroup()
         }
         .frame(height: 130)
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
+        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, y: shadowYOffset)
     }
 }
 
