@@ -16,7 +16,9 @@ struct CameraInfo: Codable {
     var aperture = ""
     var shutterSpeed = ""
     var iso = ""
+    var focalLength = ""
     var shotDate = ""
+    var location = ""
 }
 
 /// 展示作成中の写真データです。
@@ -25,6 +27,7 @@ struct PhotoDraft: Identifiable {
     let uiImage: UIImage
     let image: Image
     var title: String
+    var comment: String
     var cameraInfo: CameraInfo
 }
 
@@ -88,12 +91,13 @@ struct AddExhibitionView: View {
             }
         }
         .navigationDestination(isPresented: $showEditor) {
-            PhotoCardsEditorView(photoDrafts: $photoDrafts) { exhibitionTitle, exhibitionComment, backgroundImageName in
-                let coverImage = photoDrafts.first?.uiImage
+            PhotoCardsEditorView(photoDrafts: $photoDrafts) { exhibitionTitle, exhibitionComment, backgroundImageName, selectedCoverImage in
+                let coverImage = selectedCoverImage ?? photoDrafts.first?.uiImage
                 let photos = photoDrafts.map {
                     ExhibitionPhoto(
                         image: $0.uiImage,
                         title: $0.title,
+                        comment: $0.comment,
                         cameraInfo: $0.cameraInfo
                     )
                 }
@@ -115,6 +119,7 @@ struct AddExhibitionView: View {
                 uiImage: uiImage,
                 image: Image(uiImage: uiImage),
                 title: "",
+                comment: "",
                 cameraInfo: info
             )
             drafts.append(draft)
@@ -150,52 +155,70 @@ struct AddExhibitionView: View {
             info.iso = "\(iso)"
         }
 
+        if let focalLength = exif?[kCGImagePropertyExifFocalLength as String] as? Double {
+            info.focalLength = "\(Int(focalLength.rounded()))mm"
+        }
+
         info.shotDate = (exif?[kCGImagePropertyExifDateTimeOriginal as String] as? String) ?? ""
         return info
     }
 }
 
-/// 写真カードを縦に並べて編集する画面です。
+/// 作品ごとの写真・タイトル・撮影情報・コメントを入力する画面です。
 struct PhotoCardsEditorView: View {
     @Binding var photoDrafts: [PhotoDraft]
+    @State private var selectedIndex = 0
+    @State private var selectedCarouselIndex: Int? = 0
     @State private var editingCameraInfoIndex: Int?
     @State private var showBackgroundSelector = false
-    let onSave: (String, String, String) -> Void
+    let onSave: (String, String, String, UIImage?) -> Void
+
+    private let pageBackground = Color(red: 0.96, green: 0.94, blue: 0.92)
+    private let textBrown = Color(red: 0.22, green: 0.12, blue: 0.07)
+    private let borderBrown = Color(red: 0.46, green: 0.30, blue: 0.19)
+    private let buttonBrown = Color(red: 0.18, green: 0.11, blue: 0.07)
+    private let commentLimit = 200
 
     var body: some View {
-        VStack(spacing: 14) {
-            TabView {
-                ForEach(photoDrafts.indices, id: \.self) { index in
-                    PhotoDraftCardView(
-                        number: index + 1,
-                        draft: $photoDrafts[index],
-                        onOpenCameraInfo: {
-                            editingCameraInfoIndex = index
-                        }
-                    )
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 18)
+        ZStack {
+            pageBackground
+                .ignoresSafeArea()
+
+            GeometryReader { proxy in
+                VStack(spacing: 0) {
+                    carouselArea
+                        .frame(height: proxy.size.height * 0.52)
+
+                    inputArea
+                        .frame(height: proxy.size.height * 0.48)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
         }
-        .background(Color(red: 0.95, green: 0.89, blue: 0.86).ignoresSafeArea())
-        .navigationTitle("写真の確認")
+        .safeAreaInset(edge: .bottom) {
+            doneButton
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+                .background(pageBackground)
+        }
+        .navigationTitle("作品を追加")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("保存") {
-                    showBackgroundSelector = true
-                }
-                .disabled(photoDrafts.isEmpty)
-            }
+        .onAppear {
+            selectedCarouselIndex = selectedIndex
+        }
+        .onChange(of: selectedCarouselIndex) {
+            guard let newIndex = selectedCarouselIndex else { return }
+            selectedIndex = safeIndex(newIndex)
+        }
+        .onChange(of: photoDrafts.count) {
+            selectedIndex = safeIndex(selectedIndex)
+            selectedCarouselIndex = selectedIndex
         }
         .navigationDestination(isPresented: $showBackgroundSelector) {
-            BackgroundSelectionView { exhibitionTitle, comment, backgroundImageName in
+            BackgroundSelectionView(photoDrafts: photoDrafts) { exhibitionTitle, comment, backgroundImageName, selectedCoverImage in
                 let safeTitle = exhibitionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
                 let finalTitle = safeTitle.isEmpty ? "新しい展示" : safeTitle
-                onSave(finalTitle, comment, backgroundImageName)
+                onSave(finalTitle, comment, backgroundImageName, selectedCoverImage)
             }
         }
         .sheet(isPresented: Binding(
@@ -212,6 +235,277 @@ struct PhotoCardsEditorView: View {
         }
     }
 
+    /// 上半分の横スワイプできるカルーセルです。
+    private var carouselArea: some View {
+        GeometryReader { proxy in
+            let cardWidth = proxy.size.width * 0.68
+            let sidePadding = max((proxy.size.width - cardWidth) / 2, 24)
+            let cardHeight = min(proxy.size.height - 88, 286)
+
+            VStack(spacing: 12) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 20) {
+                        ForEach(photoDrafts.indices, id: \.self) { index in
+                            ArtworkCarouselCard(
+                                number: index + 1,
+                                image: photoDrafts[index].image,
+                                isSelected: index == currentIndex
+                            )
+                            .frame(width: cardWidth)
+                            .frame(height: cardHeight)
+                            .scrollTransition(.interactive, axis: .horizontal) { content, phase in
+                                content
+                                    .scaleEffect(phase.isIdentity ? 1 : 0.9)
+                                    .opacity(phase.isIdentity ? 1 : 0.56)
+                            }
+                            .id(index)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, sidePadding)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+                }
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $selectedCarouselIndex)
+
+                PageDotsView(count: photoDrafts.count, selectedIndex: currentIndex)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// 下半分の固定入力エリアです。写真を切り替えると、この中身も同じ番号の作品に切り替わります。
+    private var inputArea: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if photoDrafts.indices.contains(currentIndex) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("タイトル")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(textBrown)
+
+                    TextField("光と波の記憶", text: titleBinding)
+                        .font(.body.weight(.medium))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .padding(.horizontal, 16)
+                        .frame(height: 52)
+                        .background(.white.opacity(0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(borderBrown.opacity(0.34), lineWidth: 1)
+                        )
+                }
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("撮影情報（オプション）")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(textBrown)
+
+                    Button {
+                        editingCameraInfoIndex = currentIndex
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "camera")
+                                .font(.title3)
+                                .foregroundStyle(textBrown)
+
+                            Text(cameraSummary(photoDrafts[currentIndex].cameraInfo))
+                                .font(.body)
+                                .foregroundStyle(textBrown)
+                                .lineLimit(1)
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(textBrown.opacity(0.78))
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 52)
+                        .background(.white.opacity(0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(borderBrown.opacity(0.34), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("コメント（オプション）")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(textBrown)
+
+                    ZStack(alignment: .bottomTrailing) {
+                        TextEditor(text: commentBinding)
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .frame(height: 104)
+                            .background(.white.opacity(0.92))
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(borderBrown.opacity(0.34), lineWidth: 1)
+                            )
+
+                        Text("\(photoDrafts[currentIndex].comment.count) / \(commentLimit)")
+                            .font(.footnote)
+                            .foregroundStyle(textBrown.opacity(0.55))
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 12)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 30)
+        .padding(.bottom, 14)
+    }
+
+    /// 作品入力を終えて、次の展示設定画面へ進むボタンです。
+    private var doneButton: some View {
+        Button {
+            showBackgroundSelector = true
+        } label: {
+            Text("完了")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            buttonBrown,
+                            Color(red: 0.08, green: 0.05, blue: 0.03)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 14, y: 7)
+        }
+        .buttonStyle(.plain)
+        .disabled(photoDrafts.isEmpty)
+        .opacity(photoDrafts.isEmpty ? 0.45 : 1)
+    }
+
+    /// 今選ばれている写真番号を、安全な範囲に丸めます。
+    private var currentIndex: Int {
+        safeIndex(selectedIndex)
+    }
+
+    /// タイトル入力を現在選択中の作品データにつなぎます。
+    private var titleBinding: Binding<String> {
+        Binding(
+            get: {
+                guard photoDrafts.indices.contains(currentIndex) else { return "" }
+                return photoDrafts[currentIndex].title
+            },
+            set: { newValue in
+                guard photoDrafts.indices.contains(currentIndex) else { return }
+                photoDrafts[currentIndex].title = newValue
+            }
+        )
+    }
+
+    /// コメント入力を現在選択中の作品データにつなぎ、200文字を超えないようにします。
+    private var commentBinding: Binding<String> {
+        Binding(
+            get: {
+                guard photoDrafts.indices.contains(currentIndex) else { return "" }
+                return photoDrafts[currentIndex].comment
+            },
+            set: { newValue in
+                guard photoDrafts.indices.contains(currentIndex) else { return }
+                photoDrafts[currentIndex].comment = String(newValue.prefix(commentLimit))
+            }
+        )
+    }
+
+    /// カルーセルの番号が配列の外へ出ないようにします。
+    private func safeIndex(_ index: Int) -> Int {
+        guard !photoDrafts.isEmpty else { return 0 }
+        return min(max(index, 0), photoDrafts.count - 1)
+    }
+
+    /// 撮影情報セルに出す短い説明文を作ります。
+    private func cameraSummary(_ info: CameraInfo) -> String {
+        let camera = info.cameraModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lens = info.lensModel.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if camera.isEmpty && lens.isEmpty {
+            return "撮影情報を入力"
+        }
+
+        return [camera, lens]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ・ ")
+    }
+}
+
+/// カルーセルに表示する1枚分の作品カードです。
+struct ArtworkCarouselCard: View {
+    let number: Int
+    let image: Image
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("#\(String(format: "%02d", number))")
+                .font(.system(size: 27, weight: .medium, design: .serif))
+                .foregroundStyle(Color(red: 0.26, green: 0.13, blue: 0.08))
+
+            image
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .frame(height: 176)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 20)
+        .padding(.bottom, 22)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(isSelected ? 0.98 : 0.82),
+                    Color(red: 0.98, green: 0.96, blue: 0.93).opacity(isSelected ? 0.98 : 0.78)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color(red: 0.46, green: 0.30, blue: 0.19).opacity(isSelected ? 0.58 : 0.34), lineWidth: 1.1)
+        )
+        .shadow(color: .black.opacity(isSelected ? 0.16 : 0.06), radius: isSelected ? 22 : 9, y: isSelected ? 12 : 5)
+    }
+}
+
+/// Apple純正UIのようなシンプルなページドットです。
+struct PageDotsView: View {
+    let count: Int
+    let selectedIndex: Int
+
+    var body: some View {
+        HStack(spacing: 9) {
+            ForEach(0..<count, id: \.self) { index in
+                Circle()
+                    .fill(index == selectedIndex ? Color(red: 0.29, green: 0.16, blue: 0.09) : Color.black.opacity(0.12))
+                    .frame(width: 8, height: 8)
+            }
+        }
+    }
 }
 
 /// 背景を選ぶ画面です。
@@ -227,7 +521,8 @@ struct BackgroundSelectionView: View {
         GalleryBackgroundOption(name: "コンクリート", imageName: "gallery_background_concrete")
     ]
 
-    let onSave: (String, String, String) -> Void
+    let photoDrafts: [PhotoDraft]
+    let onSave: (String, String, String, UIImage?) -> Void
 
     var body: some View {
         VStack(spacing: 16) {
@@ -295,8 +590,8 @@ struct BackgroundSelectionView: View {
             }
         }
         .navigationDestination(isPresented: $showDetailInput) {
-            ExhibitionInfoInputView { title, comment in
-                onSave(title, comment, selectedBackgroundImageName)
+            ExhibitionInfoInputView(photoDrafts: photoDrafts) { title, comment, selectedCoverImage in
+                onSave(title, comment, selectedBackgroundImageName, selectedCoverImage)
             }
         }
     }
@@ -304,63 +599,192 @@ struct BackgroundSelectionView: View {
 
 /// 写真展のタイトルとコメントを入力する画面です。
 struct ExhibitionInfoInputView: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var exhibitionTitle = ""
     @State private var exhibitionComment = ""
+    @State private var selectedCoverItem: PhotosPickerItem?
+    @State private var selectedCoverImage: UIImage?
 
-    let onSave: (String, String) -> Void
+    let photoDrafts: [PhotoDraft]
+    let onSave: (String, String, UIImage?) -> Void
+
+    private let pageBackground = Color(red: 0.98, green: 0.97, blue: 0.95)
+    private let accentBeige = Color(red: 0.74, green: 0.68, blue: 0.61)
+    private var coverImage: UIImage? {
+        selectedCoverImage ?? photoDrafts.first?.uiImage
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("写真展の情報を入力してください")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        ZStack {
+            pageBackground
+                .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("写真展タイトル")
-                    .font(.subheadline.weight(.semibold))
-                TextField("例: 光の記憶", text: $exhibitionTitle)
-                    .padding(.horizontal, 12)
-                    .frame(height: 48)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.black.opacity(0.2), lineWidth: 1)
-                    )
-            }
+            VStack(spacing: 0) {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 26) {
+                        coverSelectionButton
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("コメント")
-                    .font(.subheadline.weight(.semibold))
-                TextField("例: 日常の光を集めた展示です", text: $exhibitionComment, axis: .vertical)
-                    .lineLimit(4, reservesSpace: true)
-                    .padding(12)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.black.opacity(0.2), lineWidth: 1)
-                    )
-            }
+                        inputField(
+                            title: "展示タイトル",
+                            placeholder: "海辺の休日",
+                            text: $exhibitionTitle,
+                            height: 56
+                        )
 
-            Spacer()
-        }
-        .padding(16)
-        .background(Color(red: 0.95, green: 0.89, blue: 0.86).ignoresSafeArea())
-        .navigationTitle("展示情報")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("保存") {
-                    onSave(exhibitionTitle, exhibitionComment)
-                    dismiss()
-                    dismiss()
-                    dismiss()
+                        commentInputField
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 28)
+                    .padding(.bottom, 120)
                 }
-                .disabled(exhibitionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                nextButton
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 18)
             }
         }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: selectedCoverItem) {
+            Task {
+                await loadSelectedCoverImage()
+            }
+        }
+    }
+
+    /// カバー写真を横長で表示し、アルバムから選び直せることを伝えるボタンです。
+    private var coverSelectionButton: some View {
+        PhotosPicker(
+            selection: $selectedCoverItem,
+            matching: .images
+        ) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(accentBeige.opacity(0.28))
+
+                if let coverImage {
+                    Image(uiImage: coverImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                }
+                
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.62, green: 0.56, blue: 0.50).opacity(coverImage == nil ? 0.92 : 0.18),
+                        Color(red: 0.48, green: 0.42, blue: 0.36).opacity(coverImage == nil ? 0.92 : 0.32)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                VStack(spacing: 8) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 28, weight: .medium))
+
+                    Text(coverImage == nil ? "カバー画像を追加" : "カバー画像を変更")
+                        .font(.headline.weight(.semibold))
+
+                    Text("アルバムから代表作品を選択")
+                        .font(.footnote.weight(.medium))
+                        .opacity(0.82)
+                }
+                .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+            }
+            .frame(height: 210)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(0.9), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// アルバムで選んだ写真をカバー画像として読み込みます。
+    private func loadSelectedCoverImage() async {
+        guard let data = try? await selectedCoverItem?.loadTransferable(type: Data.self) else { return }
+        guard let uiImage = UIImage(data: data) else { return }
+
+        await MainActor.run {
+            selectedCoverImage = uiImage
+        }
+    }
+
+    /// 1行入力欄を作ります。
+    private func inputField(title: String, placeholder: String, text: Binding<String>, height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.black.opacity(0.82))
+
+            TextField(placeholder, text: text)
+                .font(.body.weight(.medium))
+                .padding(.horizontal, 16)
+                .frame(height: height)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                )
+        }
+    }
+
+    /// 写真展の紹介文を入力する複数行欄です。
+    private var commentInputField: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("展示コメント")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.black.opacity(0.82))
+
+            TextField(
+                "海辺で撮影した写真をまとめました。\n静かな波の音や光の移ろいを感じながらご覧ください。",
+                text: $exhibitionComment,
+                axis: .vertical
+            )
+            .font(.body.weight(.medium))
+            .lineLimit(5, reservesSpace: true)
+            .padding(16)
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+            )
+        }
+    }
+
+    /// 入力内容を保存へ進める大きなボタンです。
+    private var nextButton: some View {
+        Button {
+            onSave(exhibitionTitle, exhibitionComment, selectedCoverImage)
+        } label: {
+            Text("次へ")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 58)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.96),
+                            Color(red: 0.17, green: 0.14, blue: 0.10)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 14, y: 7)
+        }
+        .buttonStyle(.plain)
+        .disabled(exhibitionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .opacity(exhibitionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
     }
 }
 
@@ -427,10 +851,12 @@ struct CameraInfoModalView: View {
                 VStack(spacing: 16) {
                     CameraInfoInputRow(label: "カメラ", text: $cameraInfo.cameraModel, placeholder: "例: FUJIFILM X-T30")
                     CameraInfoInputRow(label: "レンズ", text: $cameraInfo.lensModel, placeholder: "例: XF 35mm F1.4 R")
-                    CameraInfoInputRow(label: "絞り", text: $cameraInfo.aperture, placeholder: "例: f/2.0")
-                    CameraInfoInputRow(label: "シャッター", text: $cameraInfo.shutterSpeed, placeholder: "例: 1/250")
+                    CameraInfoInputRow(label: "F値", text: $cameraInfo.aperture, placeholder: "例: f/2.0")
+                    CameraInfoInputRow(label: "シャッタースピード", text: $cameraInfo.shutterSpeed, placeholder: "例: 1/250")
                     CameraInfoInputRow(label: "ISO", text: $cameraInfo.iso, placeholder: "例: 200")
+                    CameraInfoInputRow(label: "焦点距離", text: $cameraInfo.focalLength, placeholder: "例: 35mm")
                     CameraInfoInputRow(label: "撮影日時", text: $cameraInfo.shotDate, placeholder: "例: 2026:05:27 16:03:00")
+                    CameraInfoInputRow(label: "撮影場所", text: $cameraInfo.location, placeholder: "例: 湘南海岸")
                 }
                 .padding(16)
             }
@@ -473,5 +899,56 @@ struct CameraInfoInputRow: View {
 #Preview {
     NavigationStack {
         AddExhibitionView { _, _, _, _, _, _ in }
+    }
+}
+
+#Preview("作品情報入力") {
+    PhotoCardsEditorPreviewHost()
+}
+
+/// 作品情報入力画面だけをPreviewで確認するための入れ物です。
+private struct PhotoCardsEditorPreviewHost: View {
+    @State private var drafts = PhotoCardsEditorPreviewHost.makePreviewDrafts()
+
+    var body: some View {
+        NavigationStack {
+            PhotoCardsEditorView(photoDrafts: $drafts) { _, _, _, _ in }
+        }
+    }
+
+    /// Preview用のサンプル作品を作ります。
+    private static func makePreviewDrafts() -> [PhotoDraft] {
+        var info = CameraInfo()
+        info.cameraModel = "FUJIFILM X-T30"
+        info.lensModel = "XF35mm F1.4"
+        info.aperture = "f/2.0"
+        info.shutterSpeed = "1/250"
+        info.iso = "200"
+        info.focalLength = "35mm"
+        info.location = "海辺"
+
+        return [
+            PhotoDraft(
+                uiImage: UIImage(),
+                image: Image(systemName: "photo"),
+                title: "光と波の記憶",
+                comment: "夕暮れの海辺を散歩したときの一枚。",
+                cameraInfo: info
+            ),
+            PhotoDraft(
+                uiImage: UIImage(),
+                image: Image(systemName: "camera.aperture"),
+                title: "静かな午後",
+                comment: "",
+                cameraInfo: CameraInfo()
+            ),
+            PhotoDraft(
+                uiImage: UIImage(),
+                image: Image(systemName: "sparkles"),
+                title: "白い光",
+                comment: "",
+                cameraInfo: CameraInfo()
+            )
+        ]
     }
 }

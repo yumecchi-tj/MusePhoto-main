@@ -12,6 +12,7 @@ import SwiftData
 struct ExhibitionPhoto {
     let image: UIImage
     let title: String
+    let comment: String
     let cameraInfo: CameraInfo
 }
 
@@ -390,7 +391,12 @@ struct ContentView: View {
     ) {
         let storedPhotos = photos.compactMap { photo -> StoredPhoto? in
             guard let imageData = photo.image.jpegData(compressionQuality: 0.95) else { return nil }
-            return StoredPhoto(imageData: imageData, title: photo.title, cameraInfo: photo.cameraInfo)
+            return StoredPhoto(
+                imageData: imageData,
+                title: photo.title,
+                comment: photo.comment,
+                cameraInfo: photo.cameraInfo
+            )
         }
 
         let encoder = JSONEncoder()
@@ -416,7 +422,12 @@ struct ContentView: View {
             let storedPhotos = (try? decoder.decode([StoredPhoto].self, from: record.photosData)) ?? []
             let photos = storedPhotos.compactMap { stored -> ExhibitionPhoto? in
                 guard let uiImage = UIImage(data: stored.imageData) else { return nil }
-                return ExhibitionPhoto(image: uiImage, title: stored.title, cameraInfo: stored.cameraInfo)
+                return ExhibitionPhoto(
+                    image: uiImage,
+                    title: stored.title,
+                    comment: stored.comment,
+                    cameraInfo: stored.cameraInfo
+                )
             }
 
             return ExhibitionTicket(

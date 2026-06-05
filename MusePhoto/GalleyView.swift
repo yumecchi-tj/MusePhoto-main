@@ -266,7 +266,18 @@ struct PhotoInfoSheetView: View {
             InfoRow(label: "絞り", value: displayValue(photo.cameraInfo.aperture))
             InfoRow(label: "シャッタースピード", value: displayValue(photo.cameraInfo.shutterSpeed))
             InfoRow(label: "ISO", value: displayValue(photo.cameraInfo.iso))
+            InfoRow(label: "焦点距離", value: displayValue(photo.cameraInfo.focalLength))
             InfoRow(label: "撮影日時", value: displayValue(photo.cameraInfo.shotDate))
+            InfoRow(label: "撮影場所", value: displayValue(photo.cameraInfo.location))
+
+            if !photo.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider()
+
+                Text(photo.comment)
+                    .font(.body)
+                    .foregroundStyle(.black.opacity(0.82))
+                    .lineSpacing(5)
+            }
 
             Spacer()
         }
