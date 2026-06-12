@@ -286,6 +286,8 @@ struct PhotoCardsEditorView: View {
 
                     TextField("光と波の記憶", text: titleBinding)
                         .font(.body.weight(.medium))
+                        .foregroundStyle(textBrown)
+                        .tint(textBrown)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .padding(.horizontal, 16)
@@ -342,6 +344,8 @@ struct PhotoCardsEditorView: View {
                     ZStack(alignment: .bottomTrailing) {
                         TextEditor(text: commentBinding)
                             .font(.body)
+                            .foregroundStyle(textBrown)
+                            .tint(textBrown)
                             .scrollContentBackground(.hidden)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
@@ -724,6 +728,8 @@ struct ExhibitionInfoInputView: View {
 
             TextField(placeholder, text: text)
                 .font(.body.weight(.medium))
+                .foregroundStyle(.black)
+                .tint(Color(red: 0.35, green: 0.16, blue: 0.05))
                 .padding(.horizontal, 16)
                 .frame(height: height)
                 .background(.white)
@@ -748,6 +754,8 @@ struct ExhibitionInfoInputView: View {
                 axis: .vertical
             )
             .font(.body.weight(.medium))
+            .foregroundStyle(.black)
+            .tint(Color(red: 0.35, green: 0.16, blue: 0.05))
             .lineLimit(5, reservesSpace: true)
             .padding(16)
             .background(.white)
@@ -764,7 +772,7 @@ struct ExhibitionInfoInputView: View {
         Button {
             onSave(exhibitionTitle, exhibitionComment, selectedCoverImage)
         } label: {
-            Text("次へ")
+            Text("保存")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
@@ -812,6 +820,8 @@ struct PhotoDraftCardView: View {
                 .background(Color.gray.opacity(0.5))
 
             TextField("タイトル入力", text: $draft.title)
+                .foregroundStyle(.black)
+                .tint(Color(red: 0.35, green: 0.16, blue: 0.05))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .padding(.horizontal, 12)

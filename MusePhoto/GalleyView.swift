@@ -15,7 +15,10 @@ struct GalleyView: View {
     let onExitToHome: () -> Void
 
     @State private var currentIndex = 0
-    @State private var blackoutOpacity = 0.0
+    @State private var nextIndex: Int?
+    @State private var transitionProgress: CGFloat = 0
+    @State private var transitionDirection: CGFloat = -1
+    @State private var endingBlackoutOpacity = 0.0
     @State private var isTransitioning = false
     @State private var isShowingEnding = false
     @State private var isShowingPhotoInfo = false
@@ -30,13 +33,36 @@ struct GalleyView: View {
             Color.black.opacity(0.38)
                 .ignoresSafeArea()
 
+            // 画面の空いている場所をタップしても、次の作品へ進めます。
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !isTransitioning, !isShowingPhotoInfo else { return }
+                    moveToNextPhoto()
+                }
+
             VStack(spacing: 14) {
                 Spacer(minLength: 30)
 
                 if isShowingEnding {
                     endingView
+                        .transition(
+                            .move(edge: .trailing)
+                                .combined(with: .opacity)
+                        )
                 } else if ticket.photos.indices.contains(currentIndex) {
-                    FramedSlidePhotoView(photo: ticket.photos[currentIndex].image)
+                    WalkingArtworkTransitionView(
+                        currentPhoto: ticket.photos[currentIndex].image,
+                        nextPhoto: nextPhoto,
+                        direction: transitionDirection,
+                        progress: transitionProgress
+                    )
+                    // 写真が内側の余白ではなく、実際の画面端で消えるようにします。
+                    .padding(.horizontal, -24)
+                    .onTapGesture {
+                        guard !isTransitioning else { return }
+                        moveToNextPhoto()
+                    }
                 }
 
                 if !isShowingEnding {
@@ -62,6 +88,8 @@ struct GalleyView: View {
                                 .shadow(color: .white.opacity(0.25), radius: 8)
                         }
                         .buttonStyle(.plain)
+                        // 背後の「次へ」タップより、作品情報ボタンを優先します。
+                        .contentShape(Circle())
                         .offset(x: 54, y: 26)
                     }
                     .frame(maxWidth: .infinity)
@@ -84,14 +112,14 @@ struct GalleyView: View {
                     }
             )
 
+            // 最後の作品から展示終了画面へ移るときだけ、落ち着いた暗転を使います。
             Color.black
-                .opacity(blackoutOpacity)
+                .opacity(endingBlackoutOpacity)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
         }
-        .navigationTitle(ticket.title)
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $isShowingPhotoInfo) {
             if ticket.photos.indices.contains(currentIndex) {
                 PhotoInfoSheetView(photo: ticket.photos[currentIndex])
@@ -116,32 +144,41 @@ struct GalleyView: View {
         transition(to: currentIndex + 1)
     }
 
-    /// 暗転を挟んで写真を切り替えます。
-    private func transition(to nextIndex: Int) {
+    /// 現在の作品と次の作品を一定速度で横移動させます。
+    private func transition(to destinationIndex: Int) {
+        guard ticket.photos.indices.contains(destinationIndex) else { return }
+
         isTransitioning = true
-        withAnimation(.easeInOut(duration: 0.35)) {
-            blackoutOpacity = 1.0
+        nextIndex = destinationIndex
+        transitionDirection = destinationIndex > currentIndex ? -1 : 1
+        transitionProgress = 0
+
+        // スワイプの速さに関係なく、毎回同じ時間で作品を入れ替えます。
+        withAnimation(.easeInOut(duration: 2.0)) {
+            transitionProgress = 1
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
-            currentIndex = nextIndex
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            withAnimation(.easeIn(duration: 0.2)) {
-                blackoutOpacity = 0
+            withTransaction(transaction) {
+                currentIndex = destinationIndex
+                nextIndex = nil
+                transitionProgress = 0
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                isTransitioning = false
-            }
+
+            isTransitioning = false
         }
     }
 
     /// 最終写真の次で、展示終了メッセージに切り替えます。
     private func showEndingScene() {
         isTransitioning = true
+
+        // 最後の写真を暗転で包み、完全に暗くなってから終了画面へ切り替えます。
         withAnimation(.easeInOut(duration: 0.35)) {
-            blackoutOpacity = 1.0
+            endingBlackoutOpacity = 1
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
@@ -150,12 +187,19 @@ struct GalleyView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             withAnimation(.easeIn(duration: 0.25)) {
-                blackoutOpacity = 0
+                endingBlackoutOpacity = 0
             }
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
                 isTransitioning = false
             }
         }
+    }
+
+    /// 横から入ってくる次の作品を返します。
+    private var nextPhoto: UIImage? {
+        guard let nextIndex, ticket.photos.indices.contains(nextIndex) else { return nil }
+        return ticket.photos[nextIndex].image
     }
 
     /// 展示終了後に表示する案内UIです。
@@ -177,6 +221,8 @@ struct GalleyView: View {
             Button {
                 isShowingEnding = false
                 currentIndex = 0
+                transitionProgress = 0
+                endingBlackoutOpacity = 0
             } label: {
                 Text("もう一度鑑賞する")
                     .font(.headline.weight(.semibold))
@@ -310,6 +356,39 @@ struct InfoRow: View {
     }
 }
 
+/// 2枚の作品を左右からすれ違わせ、展示室内を歩くように見せます。
+struct WalkingArtworkTransitionView: View {
+    let currentPhoto: UIImage
+    let nextPhoto: UIImage?
+    let direction: CGFloat
+    let progress: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            // 写真同士の間に約1画面分の展示室が見える間隔を作ります。
+            let travelDistance = proxy.size.width * 2
+
+            ZStack {
+                FramedSlidePhotoView(photo: currentPhoto)
+                    .padding(.horizontal, 24)
+                    .offset(x: direction * travelDistance * progress)
+                    .opacity(1 - (progress * 0.24))
+
+                if let nextPhoto {
+                    FramedSlidePhotoView(photo: nextPhoto)
+                        .padding(.horizontal, 24)
+                        .offset(x: -direction * travelDistance * (1 - progress))
+                        .opacity(0.76 + (progress * 0.24))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 470)
+    }
+}
+
 /// 写真サイズにぴったり合わせて白い縁をつける表示です。
 struct FramedSlidePhotoView: View {
     let photo: UIImage
@@ -345,11 +424,13 @@ struct FramedSlidePhotoView: View {
     NavigationStack {
         GalleyView(
             ticket: ExhibitionTicket(
+                id: "preview",
                 title: "海辺の休日",
                 comment: "サンプル",
                 photoCount: 2,
                 coverImage: nil,
                 photos: [],
+                photosData: Data(),
                 backgroundImageName: "gallery_background_white",
                 publishedAt: Date()
             ),

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import ImageIO
 
 /// 展示に含まれる1枚分の写真情報です。
 struct ExhibitionPhoto {
@@ -18,12 +19,13 @@ struct ExhibitionPhoto {
 
 /// ホーム画面で表示する写真展チケットのデータです。
 struct ExhibitionTicket: Identifiable {
-    let id = UUID()
+    let id: String
     let title: String
     let comment: String
     let photoCount: Int
     let coverImage: UIImage?
     let photos: [ExhibitionPhoto]
+    let photosData: Data
     let backgroundImageName: String
     let publishedAt: Date
 }
@@ -34,7 +36,10 @@ struct ContentView: View {
 
     @State private var isShowingAddExhibitionView = false
     @State private var addExhibitionFlowID = UUID()
+    @State private var isSavingExhibition = false
+    @State private var preloadingTicketID: String?
     @State private var selectedTicket: ExhibitionTicket?
+    @State private var animatedTicket: ExhibitionTicket?
     @State private var showTicketOverlay = false
     @State private var showExhibitionPublishedMessage = false
     @State private var animationPhase = 0
@@ -45,7 +50,7 @@ struct ContentView: View {
     @State private var entranceRevealProgress: CGFloat = 0
     @State private var showExhibitionDetail = false
     @State private var hideHomeContentDuringEntrance = false
-    @State private var exhibitionDetailProgress: CGFloat = 0
+    @State private var hideHomeInterfaceDuringTicketUse = false
 
     private let museumTitle = "My Museum"
 
@@ -72,17 +77,15 @@ struct ContentView: View {
                                 Color.clear
                                     .frame(height: proxy.size.height * 0.42)
 
-                                if !ticketsFromRecords().isEmpty {
+                                let tickets = ticketsFromRecords()
+
+                                if !tickets.isEmpty {
                                     ActiveExhibitionsHeader()
 
                                     VStack(spacing: 18) {
-                                        ForEach(ticketsFromRecords()) { ticket in
+                                        ForEach(tickets) { ticket in
                                             Button {
-                                                selectedTicket = ticket
-                                                ticketVisible = true
-                                                withAnimation(.spring(response: 0.36, dampingFraction: 0.9)) {
-                                                    showTicketOverlay = true
-                                                }
+                                                selectTicketAndStartEntrance(ticket)
                                             } label: {
                                                 TicketView(ticket: ticket)
                                             }
@@ -96,6 +99,8 @@ struct ContentView: View {
                             // 下にも余白を作ると、チケットを上方向へスライドしやすくなります。
                             .padding(.bottom, proxy.size.height * 0.42)
                         }
+                        .opacity(hideHomeInterfaceDuringTicketUse ? 0 : 1)
+                        .animation(.easeInOut(duration: 0.28), value: hideHomeInterfaceDuringTicketUse)
                     }
 
                     VStack {
@@ -131,6 +136,8 @@ struct ContentView: View {
                     }
                     .allowsHitTesting(false)
                     .zIndex(10)
+                    .opacity(hideHomeInterfaceDuringTicketUse ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.28), value: hideHomeInterfaceDuringTicketUse)
                 }
                 .opacity(hideHomeContentDuringEntrance ? 0 : 1)
                 .animation(.easeInOut(duration: 0.2), value: hideHomeContentDuringEntrance)
@@ -151,10 +158,13 @@ struct ContentView: View {
                     }
                 }
             }
-            .overlay {
-                if isShowingAddExhibitionView {
+            .fullScreenCover(isPresented: $isShowingAddExhibitionView) {
+                ZStack {
                     NavigationStack {
                         AddExhibitionView { title, comment, photoCount, coverImage, photos, backgroundImageName in
+                            guard !isSavingExhibition else { return }
+                            isSavingExhibition = true
+
                             saveTicket(
                                 title: title,
                                 comment: comment,
@@ -162,28 +172,17 @@ struct ContentView: View {
                                 coverImage: coverImage,
                                 photos: photos,
                                 backgroundImageName: backgroundImageName
-                            )
-                            // 保存できたことを知らせてから、My Museum画面へ戻します。
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                showExhibitionPublishedMessage = true
-                            }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                finishAddExhibitionFlow()
-                            }
-                        }
-                        .overlay {
-                            if showExhibitionPublishedMessage {
-                                Color.black.opacity(0.22)
-                                    .ignoresSafeArea()
+                            ) { didSave in
+                                isSavingExhibition = false
+                                guard didSave else { return }
 
-                                Text("展示を開催しました")
-                                    .font(.title3.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 16)
-                                    .background(Color.black.opacity(0.72))
-                                    .clipShape(Capsule())
-                                    .transition(.opacity)
+                                // 保存完了後にメッセージを表示し、My Museum画面へ戻します。
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    showExhibitionPublishedMessage = true
+                                }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                    finishAddExhibitionFlow()
+                                }
                             }
                         }
                         .toolbar {
@@ -191,42 +190,64 @@ struct ContentView: View {
                                 Button("閉じる") {
                                     finishAddExhibitionFlow()
                                 }
+                                .disabled(isSavingExhibition)
                             }
                         }
                     }
-                    .id(addExhibitionFlowID)
-                    .transition(.opacity)
-                    .zIndex(2)
+
+                    if isSavingExhibition || showExhibitionPublishedMessage {
+                        Color.black.opacity(0.22)
+                            .ignoresSafeArea()
+
+                        if isSavingExhibition {
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                    .tint(.white)
+
+                                Text("保存しています…")
+                                    .font(.headline.weight(.semibold))
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 16)
+                            .background(Color.black.opacity(0.72))
+                            .clipShape(Capsule())
+                            .zIndex(10)
+                        } else {
+                            Text("展示を開催しました")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 16)
+                                .background(Color.black.opacity(0.72))
+                                .clipShape(Capsule())
+                                .transition(.opacity)
+                                .zIndex(10)
+                        }
+                    }
                 }
+                .id(addExhibitionFlowID)
+                .interactiveDismissDisabled(isSavingExhibition)
             }
             .overlay {
-                if showTicketOverlay, let selectedTicket {
+                if showTicketOverlay, let animatedTicket {
                     TicketUseOverlay(
-                        ticket: selectedTicket,
-                        animationPhase: $animationPhase,
+                        ticket: animatedTicket,
+                        animationPhase: animationPhase,
                         seamShift: seamShift,
-                        ticketVisible: ticketVisible,
-                        onCancel: {
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                showTicketOverlay = false
-                            }
-                            animationPhase = 0
-                            seamShift = 0
-                            ticketVisible = true
-                        },
-                        onUse: {
-                            playTicketCutAnimation()
-                        }
+                        ticketVisible: ticketVisible
                     )
-                    .transition(.opacity)
+                    .transition(
+                        .scale(scale: 0.88)
+                            .combined(with: .opacity)
+                    )
                     .zIndex(3)
                 }
             }
             .overlay {
                 if showExhibitionDetail, let activeTicket = selectedTicket {
-                    ExhibitionPreviewView(
+                    GalleyView(
                         ticket: activeTicket,
-                        appearProgress: exhibitionDetailProgress,
                         onExitToHome: resetToHome
                     )
                     .zIndex(3)
@@ -249,15 +270,47 @@ struct ContentView: View {
 
     /// 右上の展示追加ボタンを表示するかどうかを判定します。
     private var shouldShowAddButton: Bool {
-        !showTicketOverlay && !showEntranceOverlay && !showExhibitionDetail && !hideHomeContentDuringEntrance
+        !showTicketOverlay
+            && !showEntranceOverlay
+            && !showExhibitionDetail
+            && !hideHomeContentDuringEntrance
+            && !hideHomeInterfaceDuringTicketUse
     }
 
     /// 展示説明画面からホーム画面へ戻るときに、遷移用の状態を元に戻します。
     private func resetToHome() {
         showExhibitionDetail = false
         selectedTicket = nil
-        exhibitionDetailProgress = 0
+        animatedTicket = nil
         hideHomeContentDuringEntrance = false
+        hideHomeInterfaceDuringTicketUse = false
+    }
+
+    /// チケットを1回タップしただけで、中央表示から切断アニメーションまで自動で進めます。
+    private func selectTicketAndStartEntrance(_ ticket: ExhibitionTicket) {
+        guard !showTicketOverlay else { return }
+
+        selectedTicket = ticket
+        // 展示写真の先読みでselectedTicketが更新されても、演出中のチケットは同じ見た目に固定します。
+        animatedTicket = ticket
+        animationPhase = 0
+        seamShift = 0
+        ticketVisible = true
+        preloadPhotosForSelectedTicket()
+
+        // 背景画像は残し、ホームの文字・チケット一覧・追加ボタンだけを消します。
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.88)) {
+            hideHomeInterfaceDuringTicketUse = true
+            showTicketOverlay = true
+        }
+
+        // 「中央へ浮かぶ → 静止して待つ」が見えるように、切断まで十分な間を取ります。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
+            guard showTicketOverlay else { return }
+            guard animatedTicket?.id == ticket.id else { return }
+            guard animationPhase == 0 else { return }
+            playTicketCutAnimation()
+        }
     }
 
     /// 展示作成画面を閉じて、My Museum画面へ確実に戻します。
@@ -266,6 +319,7 @@ struct ContentView: View {
             showExhibitionPublishedMessage = false
             isShowingAddExhibitionView = false
         }
+        isSavingExhibition = false
 
         // 次に展示作成を開いたとき、前回の奥の画面が残らないように作り直します。
         addExhibitionFlowID = UUID()
@@ -301,6 +355,7 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.84) {
             // 暗転開始時点でチケット関連UIを確実に隠します
             showTicketOverlay = false
+            animatedTicket = nil
             seamShift = 0
             playExhibitionEntranceAnimation()
         }
@@ -310,8 +365,10 @@ struct ContentView: View {
     private func playExhibitionEntranceAnimation() {
         entrancePhase = 0
         entranceRevealProgress = 0
-        exhibitionDetailProgress = 0
         showEntranceOverlay = true
+
+        // 先読みがまだ終わっていない場合だけ、ここでも読み込みを開始します。
+        preloadPhotosForSelectedTicket()
         
         // phase 1: 暗転（約1秒）
         withAnimation(.easeInOut(duration: 1.0)) {
@@ -336,30 +393,27 @@ struct ContentView: View {
             }
         }
         
-        // 白が最大になった瞬間に展示説明画面を重ねます。まだ透明なので急に表示されません。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6.1) {
+        // 白が最大になる少し前に展示を裏側へ用意し、初回描画のかくつきを白で隠します。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.75) {
             showExhibitionDetail = true
+        }
+
+        // 展示の準備後に画面全体を白で包みます。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.1) {
             withAnimation(.linear(duration: 0.12)) {
                 entrancePhase = 4
             }
         }
         
-        // phase 5: 白を先に短く消して、展示説明画面に白い膜が残らないようにします。
+        // phase 5: 白を消すと、そのまま展示の1枚目が見えるようになります。
         DispatchQueue.main.asyncAfter(deadline: .now() + 6.25) {
-            withAnimation(.easeOut(duration: 0.18)) {
+            withAnimation(.easeInOut(duration: 0.72)) {
                 entrancePhase = 5
-            }
-        }
-
-        // 白が消えてから、展示説明画面を下からふわっと表示します。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6.42) {
-            withAnimation(.easeOut(duration: 0.9)) {
-                exhibitionDetailProgress = 1
             }
         }
         
         // 完了後にオーバーレイを閉じる
-        DispatchQueue.main.asyncAfter(deadline: .now() + 7.35) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7.02) {
             showEntranceOverlay = false
             entrancePhase = 0
             entranceRevealProgress = 0
@@ -368,49 +422,82 @@ struct ContentView: View {
         }
     }
 
-    /// SwiftDataに展示情報を保存します。
+    /// 写真の変換を別の処理で行い、完了後にSwiftDataへ展示情報を保存します。
     private func saveTicket(
         title: String,
         comment: String,
         photoCount: Int,
         coverImage: UIImage?,
         photos: [ExhibitionPhoto],
-        backgroundImageName: String
+        backgroundImageName: String,
+        completion: @escaping (Bool) -> Void
     ) {
-        let storedPhotos = photos.compactMap { photo -> StoredPhoto? in
-            guard let imageData = photo.image.jpegData(compressionQuality: 0.95) else { return nil }
-            return StoredPhoto(
-                imageData: imageData,
-                title: photo.title,
-                comment: photo.comment,
-                cameraInfo: photo.cameraInfo
-            )
+        DispatchQueue.global(qos: .userInitiated).async {
+            let storedPhotos = photos.compactMap { photo -> StoredPhoto? in
+                guard let imageData = photo.image.jpegData(compressionQuality: 0.9) else { return nil }
+                return StoredPhoto(
+                    imageData: imageData,
+                    title: photo.title,
+                    comment: photo.comment,
+                    cameraInfo: photo.cameraInfo
+                )
+            }
+
+            let encoder = JSONEncoder()
+            guard let photosData = try? encoder.encode(storedPhotos) else {
+                DispatchQueue.main.async {
+                    completion(false)
+                }
+                return
+            }
+            let coverImageData = coverImage?.jpegData(compressionQuality: 0.9)
+
+            DispatchQueue.main.async {
+                let record = ExhibitionRecord(
+                    title: title,
+                    comment: comment,
+                    photoCount: photoCount,
+                    backgroundImageName: backgroundImageName,
+                    publishedAt: Date(),
+                    coverImageData: coverImageData,
+                    photosData: photosData
+                )
+                modelContext.insert(record)
+
+                do {
+                    try modelContext.save()
+                    completion(true)
+                } catch {
+                    completion(false)
+                }
+            }
         }
-
-        let encoder = JSONEncoder()
-        guard let photosData = try? encoder.encode(storedPhotos) else { return }
-
-        let record = ExhibitionRecord(
-            title: title,
-            comment: comment,
-            photoCount: photoCount,
-            backgroundImageName: backgroundImageName,
-            publishedAt: Date(),
-            coverImageData: coverImage?.jpegData(compressionQuality: 0.95),
-            photosData: photosData
-        )
-        modelContext.insert(record)
-        try? modelContext.save()
     }
 
-    /// SwiftData保存データを画面表示用データへ変換します。
-    private func ticketsFromRecords() -> [ExhibitionTicket] {
-        let decoder = JSONDecoder()
+    /// チケット確認中に展示写真を裏で復元し、入場アニメーションと処理が重ならないようにします。
+    private func preloadPhotosForSelectedTicket() {
+        guard let ticket = selectedTicket else { return }
+        guard ticket.photos.isEmpty else { return }
+        guard preloadingTicketID != ticket.id else { return }
 
-        return records.map { record in
-            let storedPhotos = (try? decoder.decode([StoredPhoto].self, from: record.photosData)) ?? []
+        preloadingTicketID = ticket.id
+        let ticketID = ticket.id
+        let photosData = ticket.photosData
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let decoder = JSONDecoder()
+            let storedPhotos = (try? decoder.decode([StoredPhoto].self, from: photosData)) ?? []
+
             let photos = storedPhotos.compactMap { stored -> ExhibitionPhoto? in
-                guard let uiImage = UIImage(data: stored.imageData) else { return nil }
+                guard let source = CGImageSourceCreateWithData(stored.imageData as CFData, nil) else { return nil }
+                let options: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 1800
+                ]
+                guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+                let uiImage = UIImage(cgImage: cgImage)
+
                 return ExhibitionPhoto(
                     image: uiImage,
                     title: stored.title,
@@ -419,12 +506,40 @@ struct ContentView: View {
                 )
             }
 
+            DispatchQueue.main.async {
+                if preloadingTicketID == ticketID {
+                    preloadingTicketID = nil
+                }
+
+                guard let currentTicket = selectedTicket else { return }
+                guard currentTicket.id == ticketID, currentTicket.photos.isEmpty else { return }
+
+                selectedTicket = ExhibitionTicket(
+                    id: currentTicket.id,
+                    title: currentTicket.title,
+                    comment: currentTicket.comment,
+                    photoCount: currentTicket.photoCount,
+                    coverImage: currentTicket.coverImage,
+                    photos: photos,
+                    photosData: currentTicket.photosData,
+                    backgroundImageName: currentTicket.backgroundImageName,
+                    publishedAt: currentTicket.publishedAt
+                )
+            }
+        }
+    }
+
+    /// SwiftData保存データを画面表示用データへ変換します。
+    private func ticketsFromRecords() -> [ExhibitionTicket] {
+        return records.map { record in
             return ExhibitionTicket(
+                id: String(describing: record.persistentModelID),
                 title: record.title,
                 comment: record.comment,
                 photoCount: record.photoCount,
                 coverImage: record.coverImageData.flatMap { UIImage(data: $0) },
-                photos: photos,
+                photos: [],
+                photosData: record.photosData,
                 backgroundImageName: record.backgroundImageName,
                 publishedAt: record.publishedAt
             )
@@ -448,63 +563,33 @@ struct ActiveExhibitionsHeader: View {
     }
 }
 
-/// チケットを使う前の確認モーダル（中央表示）です。
+/// 選択したチケットを中央に浮かべ、切断アニメーションを表示します。
 struct TicketUseOverlay: View {
     let ticket: ExhibitionTicket
-    @Binding var animationPhase: Int
+    let animationPhase: Int
     let seamShift: CGFloat
     let ticketVisible: Bool
-    let onCancel: () -> Void
-    let onUse: () -> Void
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.58)
+            // 背景画像の雰囲気を残すため、暗くしすぎない薄いレイヤーにします。
+            Color.black.opacity(0.24)
                 .ignoresSafeArea()
 
-            VStack(spacing: 22) {
-                if ticketVisible {
-                    TicketCutAnimationView(
-                        ticket: ticket,
-                        animationPhase: animationPhase,
-                        seamShift: seamShift
-                    )
-                        .frame(height: 170)
-                        .scaleEffect(overlayScale(phase: animationPhase))
-                        .offset(y: overlayOffsetY(phase: animationPhase))
-                        .opacity(animationPhase == 6 ? 0.0 : 1.0)
-                }
-
-                VStack(spacing: 12) {
-                    Button {
-                        onUse()
-                    } label: {
-                        Text("チケットを使う")
-                            .font(.title3.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 54)
-                            .foregroundStyle(.white)
-                            .background(Color.black.opacity(0.82))
-                            .clipShape(Capsule())
-                    }
-                    .disabled(animationPhase > 0)
-
-                    Button {
-                        onCancel()
-                    } label: {
-                        Text("キャンセル")
-                            .font(.headline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 48)
-                            .foregroundStyle(.white.opacity(0.95))
-                            .background(Color.white.opacity(0.12))
-                            .clipShape(Capsule())
-                    }
-                    .disabled(animationPhase > 0)
-                }
-                .padding(.horizontal, 26)
-                .opacity(ticketVisible ? 1 : 0)
+            if ticketVisible {
+                TicketCutAnimationView(
+                    ticket: ticket,
+                    animationPhase: animationPhase,
+                    seamShift: seamShift
+                )
+                .frame(height: 170)
+                .padding(.horizontal, 20)
+                .scaleEffect(overlayScale(phase: animationPhase))
+                .offset(y: overlayOffsetY(phase: animationPhase))
+                .opacity(animationPhase == 6 ? 0.0 : 1.0)
             }
-            .padding(.horizontal, 20)
         }
+        .allowsHitTesting(false)
     }
     
     /// フェーズごとの全体スケールです（沈み込みと溜め）。
@@ -773,102 +858,6 @@ struct TicketPaperParticleView: View {
     }
 }
 
-/// チケットタップ後に表示する展示プレビュー画面です。
-struct ExhibitionPreviewView: View {
-    let ticket: ExhibitionTicket
-    let appearProgress: CGFloat
-    let onExitToHome: () -> Void
-
-    var body: some View {
-        ZStack {
-            Image(ticket.backgroundImageName)
-                .resizable()
-                .scaledToFill()
-                .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [Color.clear, Color.black.opacity(0.28), Color.black.opacity(0.65)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            VStack {
-                Spacer()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(ticket.title)
-                        .font(.system(size: 45, weight: .bold))
-                        .foregroundStyle(.white)
-
-                    Text("\(ticket.photoCount)枚の写真")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.92))
-
-                    Text("公開中   \(publishedDateText(ticket.publishedAt)) -")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.92))
-
-                    if !ticket.comment.isEmpty {
-                        Text(ticket.comment)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.95))
-                            .lineSpacing(5)
-                    }
-
-                    NavigationLink {
-                        GalleyView(ticket: ticket, onExitToHome: onExitToHome)
-                    } label: {
-                        Text("展示に入る")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 52)
-                            .background(Color.white.opacity(0.24))
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.white.opacity(0.25), lineWidth: 1)
-                            )
-                    }
-                    .padding(.top, 8)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 28)
-                .padding(.bottom, 118)
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            Button {
-                onExitToHome()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 50, height: 50)
-                    .background(Color.black.opacity(0.35))
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-            }
-            .padding(.leading, 20)
-            .padding(.top, 70)
-        }
-        .opacity(appearProgress)
-        .offset(y: 28 * (1 - appearProgress))
-    }
-
-    /// 公開日を表示用の文字列に変換します。
-    private func publishedDateText(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ja_JP")
-        formatter.dateFormat = "yyyy.MM.dd"
-        return formatter.string(from: date)
-    }
-}
-
 /// 写真展のチケット見た目を表示します。
 struct TicketView: View {
     let ticket: ExhibitionTicket
@@ -960,10 +949,9 @@ struct TicketThumbnailView: View {
     let ticket: ExhibitionTicket
 
     var body: some View {
-        let image = ticket.photos.first?.image ?? ticket.coverImage
-
         Group {
-            if let image {
+            // 作品写真の先読みが終わっても、チケットには選択したカバー写真を表示し続けます。
+            if let image = ticket.coverImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
