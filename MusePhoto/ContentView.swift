@@ -20,6 +20,7 @@ struct ExhibitionPhoto {
 /// ホーム画面で表示する写真展チケットのデータです。
 struct ExhibitionTicket: Identifiable {
     let id: String
+    let exhibitionNumber: Int
     let title: String
     let comment: String
     let photoCount: Int
@@ -305,7 +306,7 @@ struct ContentView: View {
     /// 終了確認ダイアログに展示タイトルを表示します。
     private var endExhibitionDialogTitle: String {
         guard let ticketPendingEnd else { return "展示を終了しますか？" }
-        return "「\(ticketPendingEnd.title)」の展示を終了しますか？"
+        return "「\(ticketPendingEnd.title)」の\n展示を終了しますか？"
     }
 
     /// 削除候補の有無と確認ダイアログの表示状態を連動させます。
@@ -502,7 +503,7 @@ struct ContentView: View {
                 return StoredPhoto(
                     imageData: imageData,
                     title: photo.title,
-                    comment: photo.comment,
+                    comment: "",
                     cameraInfo: photo.cameraInfo
                 )
             }
@@ -580,6 +581,7 @@ struct ContentView: View {
 
                 selectedTicket = ExhibitionTicket(
                     id: currentTicket.id,
+                    exhibitionNumber: currentTicket.exhibitionNumber,
                     title: currentTicket.title,
                     comment: currentTicket.comment,
                     photoCount: currentTicket.photoCount,
@@ -595,9 +597,27 @@ struct ContentView: View {
 
     /// SwiftData保存データを画面表示用データへ変換します。
     private func ticketsFromRecords() -> [ExhibitionTicket] {
+        let exhibitionNumbers = Dictionary(
+            uniqueKeysWithValues: records
+                .sorted { lhs, rhs in
+                    if lhs.publishedAt == rhs.publishedAt {
+                        return String(describing: lhs.persistentModelID)
+                            < String(describing: rhs.persistentModelID)
+                    }
+                    return lhs.publishedAt < rhs.publishedAt
+                }
+                .enumerated()
+                .map { index, record in
+                    (String(describing: record.persistentModelID), index + 1)
+                }
+        )
+
         return records.map { record in
+            let recordID = String(describing: record.persistentModelID)
+
             return ExhibitionTicket(
-                id: String(describing: record.persistentModelID),
+                id: recordID,
+                exhibitionNumber: exhibitionNumbers[recordID] ?? 1,
                 title: record.title,
                 comment: record.comment,
                 photoCount: record.photoCount,
@@ -812,7 +832,7 @@ struct ExhibitionEntranceOverlay: View {
                 .ignoresSafeArea()
             
             VStack(spacing: 8) {
-                Text("Exhibition \(String(format: "%02d", max(ticket.photoCount, 1)))")
+                Text("Exhibition \(String(format: "%02d", max(ticket.exhibitionNumber, 1)))")
                     .font(.system(size: 16, weight: .medium, design: .serif))
                     .foregroundStyle(.white.opacity(0.84))
                 
@@ -822,7 +842,7 @@ struct ExhibitionEntranceOverlay: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
                 
-                Text(themeText)
+                Text("全\(ticket.photoCount)作品")
                     .font(.system(size: 16, weight: .regular, design: .serif))
                     .foregroundStyle(.white.opacity(0.82))
                     .multilineTextAlignment(.center)
@@ -831,14 +851,6 @@ struct ExhibitionEntranceOverlay: View {
             .opacity(titleOpacity(phase: phase))
             .scaleEffect(phase >= 2 && phase < 4 ? 1 : 0.95)
         }
-    }
-    
-    /// 展示テーマの補助テキストを返します。
-    private var themeText: String {
-        if !ticket.comment.isEmpty {
-            return ticket.comment
-        }
-        return "\(ticket.photoCount)作品の展示"
     }
     
     /// フェーズごとの暗転濃度です。

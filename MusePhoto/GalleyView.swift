@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Photos
 
 /// 展示写真を手動スライドで鑑賞する画面です。
 struct GalleyView: View {
@@ -22,6 +23,7 @@ struct GalleyView: View {
     @State private var isTransitioning = false
     @State private var isShowingEnding = false
     @State private var isShowingPhotoInfo = false
+    @State private var isShowingPrintSelection = false
 
     var body: some View {
         ZStack {
@@ -121,6 +123,9 @@ struct GalleyView: View {
                     .presentationDragIndicator(.visible)
             }
         }
+        .sheet(isPresented: $isShowingPrintSelection) {
+            ExhibitionPrintSelectionView(ticket: ticket)
+        }
     }
 
     /// 右方向スワイプで前の写真へ移動します。
@@ -213,6 +218,19 @@ struct GalleyView: View {
             Spacer()
 
             Button {
+                isShowingPrintSelection = true
+            } label: {
+                Label("展示の記録を保存", systemImage: "square.and.arrow.down")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Color.white.opacity(0.24))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Button {
                 isShowingEnding = false
                 currentIndex = 0
                 transitionProgress = 0
@@ -247,6 +265,249 @@ struct GalleyView: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 保存する作品を1枚選び、4:5の展示画像を写真アプリへ保存します。
+struct ExhibitionPrintSelectionView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let ticket: ExhibitionTicket
+
+    @State private var selectedIndex = 0
+    @State private var isSaving = false
+    @State private var saveMessage: String?
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 18) {
+                if let selectedPhoto {
+                    ExhibitionPrintView(
+                        photo: selectedPhoto.image,
+                        backgroundImageName: printBackgroundImageName
+                    )
+                    .aspectRatio(4 / 5, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .shadow(color: .black.opacity(0.16), radius: 14, y: 7)
+                    .padding(.horizontal, 44)
+                }
+
+                Text("保存する作品を1枚選んでください")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 10) {
+                        ForEach(ticket.photos.indices, id: \.self) { index in
+                            Button {
+                                selectedIndex = index
+                            } label: {
+                                GeometryReader { proxy in
+                                    Image(uiImage: ticket.photos[index].image)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: proxy.size.width, height: proxy.size.width)
+                                        .clipped()
+                                }
+                                .aspectRatio(1, contentMode: .fit)
+                                    .overlay {
+                                        if selectedIndex == index {
+                                            ZStack {
+                                                Color.black.opacity(0.22)
+
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .font(.title2)
+                                                    .foregroundStyle(.white)
+                                            }
+                                        }
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+
+                Button {
+                    saveSelectedPrint()
+                } label: {
+                    HStack(spacing: 10) {
+                        if isSaving {
+                            ProgressView()
+                                .tint(.white)
+                        }
+
+                        Text(isSaving ? "保存しています…" : "写真に保存")
+                            .font(.headline.weight(.semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 54)
+                    .background(Color(red: 0.20, green: 0.12, blue: 0.07))
+                    .clipShape(RoundedRectangle(cornerRadius: 17))
+                }
+                .buttonStyle(.plain)
+                .disabled(isSaving || selectedPhoto == nil)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+            }
+            .padding(.top, 18)
+            .background(Color(red: 0.96, green: 0.94, blue: 0.92).ignoresSafeArea())
+            .navigationTitle("展示の記録")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("閉じる") {
+                        dismiss()
+                    }
+                    .disabled(isSaving)
+                }
+            }
+            .alert("保存結果", isPresented: saveMessageBinding) {
+                Button("OK") {
+                    saveMessage = nil
+                }
+            } message: {
+                Text(saveMessage ?? "")
+            }
+        }
+    }
+
+    /// 現在選択している作品を安全に返します。
+    private var selectedPhoto: ExhibitionPhoto? {
+        guard ticket.photos.indices.contains(selectedIndex) else { return nil }
+        return ticket.photos[selectedIndex]
+    }
+
+    /// 展示背景名から、保存画像用の背景名へ変換します。
+    private var printBackgroundImageName: String {
+        ticket.backgroundImageName.replacingOccurrences(
+            of: "gallery_background_",
+            with: "gallery_print_"
+        )
+    }
+
+    /// 保存結果の文章とアラート表示を連動させます。
+    private var saveMessageBinding: Binding<Bool> {
+        Binding(
+            get: { saveMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    saveMessage = nil
+                }
+            }
+        )
+    }
+
+    /// 1080×1350の展示画像を作り、写真アプリへ保存します。
+    private func saveSelectedPrint() {
+        guard let selectedPhoto else { return }
+        isSaving = true
+
+        let printView = ExhibitionPrintView(
+            photo: selectedPhoto.image,
+            backgroundImageName: printBackgroundImageName
+        )
+        .frame(width: 1080, height: 1350)
+
+        let renderer = ImageRenderer(content: printView)
+        renderer.proposedSize = ProposedViewSize(width: 1080, height: 1350)
+        renderer.scale = 1
+
+        guard let image = renderer.uiImage else {
+            isSaving = false
+            saveMessage = "画像を作成できませんでした"
+            return
+        }
+
+        requestPhotoAccessAndSave(image)
+    }
+
+    /// 写真追加の許可を確認して、生成画像を写真アプリへ保存します。
+    private func requestPhotoAccessAndSave(_ image: UIImage) {
+        // Xcode側の説明文が未設定でも、権限要求でアプリが終了しないようにします。
+        guard Bundle.main.object(
+            forInfoDictionaryKey: "NSPhotoLibraryAddUsageDescription"
+        ) != nil else {
+            isSaving = false
+            saveMessage = "写真保存の権限設定が必要です"
+            return
+        }
+
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else {
+                DispatchQueue.main.async {
+                    isSaving = false
+                    saveMessage = "写真への保存が許可されていません"
+                }
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            } completionHandler: { didSave, _ in
+                DispatchQueue.main.async {
+                    isSaving = false
+                    saveMessage = didSave
+                        ? "写真アプリに保存しました"
+                        : "写真を保存できませんでした"
+                }
+            }
+        }
+    }
+}
+
+/// 4:5の背景中央に、余白を広く取った額装作品を配置します。
+struct ExhibitionPrintView: View {
+    let photo: UIImage
+    let backgroundImageName: String
+
+    var body: some View {
+        GeometryReader { proxy in
+            let frameSize = fittedFrameSize(in: proxy.size)
+
+            ZStack {
+                Image(backgroundImageName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+
+                Image(uiImage: photo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: frameSize.width, height: frameSize.height)
+                    .padding(proxy.size.width * 0.025)
+                    .background(Color.white)
+                    .shadow(
+                        color: .black.opacity(0.34),
+                        radius: proxy.size.width * 0.018,
+                        y: proxy.size.width * 0.012
+                    )
+            }
+        }
+    }
+
+    /// 写真の縦横比を保ちながら、背景に余裕が残る額縁サイズを計算します。
+    private func fittedFrameSize(in canvasSize: CGSize) -> CGSize {
+        let imageAspect = photo.size.width / max(photo.size.height, 1)
+        let isPortraitPhoto = imageAspect < 0.9
+        let maxWidth = canvasSize.width * (isPortraitPhoto ? 0.70 : 0.64)
+        // 縦写真は高さを広く使い、背景の中で小さく見えすぎないようにします。
+        let maxHeight = canvasSize.height * (isPortraitPhoto ? 0.54 : 0.40)
+
+        if maxWidth / imageAspect <= maxHeight {
+            return CGSize(width: maxWidth, height: maxWidth / imageAspect)
+        }
+
+        return CGSize(width: maxHeight * imageAspect, height: maxHeight)
     }
 }
 
@@ -317,15 +578,6 @@ struct PhotoInfoSheetView: View {
             InfoRow(label: "焦点距離", value: displayValue(photo.cameraInfo.focalLength))
             InfoRow(label: "撮影日時", value: displayValue(photo.cameraInfo.shotDate))
             InfoRow(label: "撮影場所", value: displayValue(photo.cameraInfo.location))
-
-            if !photo.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Divider()
-
-                Text(photo.comment)
-                    .font(.body)
-                    .foregroundStyle(.black.opacity(0.82))
-                    .lineSpacing(5)
-            }
 
             Spacer()
         }
@@ -400,9 +652,10 @@ struct FramedSlidePhotoView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let availableWidth = proxy.size.width
+            let availableWidth = max(proxy.size.width - (frameLineWidth * 2), 1)
+            let availableHeight = max(maxHeight - (frameLineWidth * 2), 1)
             let imageAspect = photo.size.width / max(photo.size.height, 1)
-            let fittedWidth = min(availableWidth, maxHeight * imageAspect)
+            let fittedWidth = min(availableWidth, availableHeight * imageAspect)
             let fittedHeight = fittedWidth / imageAspect
 
             Image(uiImage: photo)
@@ -410,10 +663,9 @@ struct FramedSlidePhotoView: View {
                 .scaledToFill()
                 .frame(width: fittedWidth, height: fittedHeight)
                 .clipped()
-                .overlay {
-                    Rectangle()
-                        .stroke(Color.white, lineWidth: frameLineWidth)
-                }
+                // strokeではなく外側に均等な余白を付け、縦写真でも四辺を同じ太さにします。
+                .padding(frameLineWidth)
+                .background(Color.white)
                 .shadow(color: .black.opacity(0.28), radius: 10, y: 6)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -427,6 +679,7 @@ struct FramedSlidePhotoView: View {
         GalleyView(
             ticket: ExhibitionTicket(
                 id: "preview",
+                exhibitionNumber: 1,
                 title: "海辺の休日",
                 comment: "サンプル",
                 photoCount: 2,

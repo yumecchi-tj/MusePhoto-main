@@ -97,7 +97,7 @@ struct AddExhibitionView: View {
                     ExhibitionPhoto(
                         image: $0.uiImage,
                         title: $0.title,
-                        comment: $0.comment,
+                        comment: "",
                         cameraInfo: $0.cameraInfo
                     )
                 }
@@ -164,7 +164,7 @@ struct AddExhibitionView: View {
     }
 }
 
-/// 作品ごとの写真・タイトル・撮影情報・コメントを入力する画面です。
+/// 作品ごとの写真・タイトル・撮影情報を入力する画面です。
 struct PhotoCardsEditorView: View {
     @Binding var photoDrafts: [PhotoDraft]
     @State private var selectedIndex = 0
@@ -177,7 +177,6 @@ struct PhotoCardsEditorView: View {
     private let textBrown = Color(red: 0.22, green: 0.12, blue: 0.07)
     private let borderBrown = Color(red: 0.46, green: 0.30, blue: 0.19)
     private let buttonBrown = Color(red: 0.18, green: 0.11, blue: 0.07)
-    private let commentLimit = 200
 
     var body: some View {
         ZStack {
@@ -336,34 +335,6 @@ struct PhotoCardsEditorView: View {
                     .buttonStyle(.plain)
                 }
 
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("コメント（オプション）")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(textBrown)
-
-                    ZStack(alignment: .bottomTrailing) {
-                        TextEditor(text: commentBinding)
-                            .font(.body)
-                            .foregroundStyle(textBrown)
-                            .tint(textBrown)
-                            .scrollContentBackground(.hidden)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .frame(height: 104)
-                            .background(.white.opacity(0.92))
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(borderBrown.opacity(0.34), lineWidth: 1)
-                            )
-
-                        Text("\(photoDrafts[currentIndex].comment.count) / \(commentLimit)")
-                            .font(.footnote)
-                            .foregroundStyle(textBrown.opacity(0.55))
-                            .padding(.trailing, 16)
-                            .padding(.bottom, 12)
-                    }
-                }
             }
         }
         .padding(.horizontal, 24)
@@ -414,20 +385,6 @@ struct PhotoCardsEditorView: View {
             set: { newValue in
                 guard photoDrafts.indices.contains(currentIndex) else { return }
                 photoDrafts[currentIndex].title = newValue
-            }
-        )
-    }
-
-    /// コメント入力を現在選択中の作品データにつなぎ、200文字を超えないようにします。
-    private var commentBinding: Binding<String> {
-        Binding(
-            get: {
-                guard photoDrafts.indices.contains(currentIndex) else { return "" }
-                return photoDrafts[currentIndex].comment
-            },
-            set: { newValue in
-                guard photoDrafts.indices.contains(currentIndex) else { return }
-                photoDrafts[currentIndex].comment = String(newValue.prefix(commentLimit))
             }
         )
     }
