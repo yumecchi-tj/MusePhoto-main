@@ -76,21 +76,15 @@ struct GalleyView: View {
                             isShowingPhotoInfo = true
                         } label: {
                             Image(systemName: "info.circle")
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 46, height: 46)
-                                .background(Color.white.opacity(0.12))
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.white.opacity(0.55), lineWidth: 1.2)
-                                )
-                                .shadow(color: .white.opacity(0.25), radius: 8)
+                                .font(.system(size: 25, weight: .regular))
+                                .foregroundStyle(.white.opacity(0.92))
+                                .frame(width: 44, height: 44)
+                                .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
                         // 背後の「次へ」タップより、作品情報ボタンを優先します。
                         .contentShape(Circle())
-                        .offset(x: 54, y: 26)
+                        .offset(x: 48)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -256,37 +250,45 @@ struct GalleyView: View {
     }
 }
 
-/// 展示の進行状況を、●─○のような館内導線で表示します。
+/// 展示の進行状況を、固定幅の細いバーと数字で表示します。
 struct ExhibitionProgressIndicator: View {
     let totalCount: Int
     let currentIndex: Int
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<max(totalCount, 0), id: \.self) { index in
-                let isCurrent = index == currentIndex
+        HStack(spacing: 12) {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.25))
 
-                Circle()
-                    .fill(isCurrent ? Color.white : Color.clear)
-                    .frame(width: 10, height: 10)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(isCurrent ? 0.95 : 0.65), lineWidth: 1)
-                    )
-                    .shadow(color: isCurrent ? .white.opacity(0.9) : .clear, radius: 8)
-
-                if index < totalCount - 1 {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.45))
-                        .frame(width: 28, height: 1)
-                        .padding(.horizontal, 3)
+                    Capsule()
+                        .fill(Color.white.opacity(0.92))
+                        .frame(width: proxy.size.width * progress)
                 }
             }
+            // 作品数に関係なく、進行バーの長さは一定です。
+            .frame(width: 132, height: 2)
+
+            Text("\(displayedIndex) / \(max(totalCount, 0))")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(minWidth: 36, alignment: .leading)
         }
-        .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Color.black.opacity(0.22))
-        .clipShape(Capsule())
+    }
+
+    /// 配列の番号を、ユーザー向けの1始まりの番号に変換します。
+    private var displayedIndex: Int {
+        guard totalCount > 0 else { return 0 }
+        return min(max(currentIndex + 1, 1), totalCount)
+    }
+
+    /// 現在位置を0〜1の割合へ変換します。
+    private var progress: CGFloat {
+        guard totalCount > 0 else { return 0 }
+        return CGFloat(displayedIndex) / CGFloat(totalCount)
     }
 }
 

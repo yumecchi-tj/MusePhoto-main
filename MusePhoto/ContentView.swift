@@ -40,6 +40,7 @@ struct ContentView: View {
     @State private var preloadingTicketID: String?
     @State private var selectedTicket: ExhibitionTicket?
     @State private var animatedTicket: ExhibitionTicket?
+    @State private var ticketPendingEnd: ExhibitionTicket?
     @State private var showTicketOverlay = false
     @State private var showExhibitionPublishedMessage = false
     @State private var animationPhase = 0
@@ -71,34 +72,60 @@ struct ContentView: View {
                         .ignoresSafeArea()
 
                     GeometryReader { proxy in
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 22) {
-                                // チケットの初期位置を画面の下半分に置くための余白です。
-                                Color.clear
-                                    .frame(height: proxy.size.height * 0.42)
+                        let tickets = ticketsFromRecords()
 
-                                let tickets = ticketsFromRecords()
+                        if tickets.isEmpty {
+                            EmptyMuseumView {
+                                openAddExhibitionView()
+                            }
+                            .padding(.horizontal, 28)
+                            .padding(.top, 110)
+                            .padding(.bottom, 48)
+                        } else {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 22) {
+                                    // チケットの初期位置を画面の下半分に置くための余白です。
+                                    Color.clear
+                                        .frame(height: proxy.size.height * 0.42)
 
-                                if !tickets.isEmpty {
                                     ActiveExhibitionsHeader()
 
                                     VStack(spacing: 18) {
                                         ForEach(tickets) { ticket in
-                                            Button {
-                                                selectTicketAndStartEntrance(ticket)
-                                            } label: {
-                                                TicketView(ticket: ticket)
-                                            }
-                                            .buttonStyle(.plain)
+                                            InteractiveMuseumTicket(
+                                                ticket: ticket,
+                                                onTap: {
+                                                    selectTicketAndStartEntrance(ticket)
+                                                },
+                                                onLongPress: {
+                                                    ticketPendingEnd = ticket
+                                                }
+                                            )
                                         }
                                     }
                                 }
+                                .padding(.horizontal, 20)
+                                .padding(.top, 26)
+                                // 最後のチケットも固定ボタンの上まで動かせるよう、下に十分な余白を作ります。
+                                .padding(.bottom, max(proxy.safeAreaInsets.bottom + 150, 170))
+                            }
+                        }
+                    }
+                    .opacity(hideHomeInterfaceDuringTicketUse ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.28), value: hideHomeInterfaceDuringTicketUse)
+
+                    if !records.isEmpty {
+                        VStack {
+                            Spacer()
+
+                            CreateExhibitionButton(title: "新しい展示を作る") {
+                                openAddExhibitionView()
                             }
                             .padding(.horizontal, 20)
-                            .padding(.top, 26)
-                            // 下にも余白を作ると、チケットを上方向へスライドしやすくなります。
-                            .padding(.bottom, proxy.size.height * 0.42)
+                            .padding(.bottom, 48)
                         }
+                        // チケットはこの固定ボタンの背面を通ってスクロールします。
+                        .zIndex(9)
                         .opacity(hideHomeInterfaceDuringTicketUse ? 0 : 1)
                         .animation(.easeInOut(duration: 0.28), value: hideHomeInterfaceDuringTicketUse)
                     }
@@ -141,22 +168,6 @@ struct ContentView: View {
                 }
                 .opacity(hideHomeContentDuringEntrance ? 0 : 1)
                 .animation(.easeInOut(duration: 0.2), value: hideHomeContentDuringEntrance)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    if shouldShowAddButton {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.35)) {
-                                isShowingAddExhibitionView = true
-                            }
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.title3.weight(.semibold))
-                        }
-                        .tint(.white)
-                        .accessibilityLabel("展示を追加")
-                    }
-                }
             }
             .fullScreenCover(isPresented: $isShowingAddExhibitionView) {
                 ZStack {
@@ -229,6 +240,20 @@ struct ContentView: View {
                 .id(addExhibitionFlowID)
                 .interactiveDismissDisabled(isSavingExhibition)
             }
+            .alert(
+                endExhibitionDialogTitle,
+                isPresented: endExhibitionDialogBinding
+            ) {
+                Button("展示を終了する", role: .destructive) {
+                    endPendingExhibition()
+                }
+
+                Button("キャンセル", role: .cancel) {
+                    ticketPendingEnd = nil
+                }
+            } message: {
+                Text("この展示と作品情報は削除されます。\nこの操作は取り消せません。")
+            }
             .overlay {
                 if showTicketOverlay, let animatedTicket {
                     TicketUseOverlay(
@@ -268,13 +293,52 @@ struct ContentView: View {
         }
     }
 
-    /// 右上の展示追加ボタンを表示するかどうかを判定します。
-    private var shouldShowAddButton: Bool {
-        !showTicketOverlay
-            && !showEntranceOverlay
-            && !showExhibitionDetail
-            && !hideHomeContentDuringEntrance
-            && !hideHomeInterfaceDuringTicketUse
+    /// 展示作成画面を滑らかに開きます。
+    private func openAddExhibitionView() {
+        guard !showTicketOverlay, !showEntranceOverlay, !showExhibitionDetail else { return }
+
+        withAnimation(.easeInOut(duration: 0.35)) {
+            isShowingAddExhibitionView = true
+        }
+    }
+
+    /// 終了確認ダイアログに展示タイトルを表示します。
+    private var endExhibitionDialogTitle: String {
+        guard let ticketPendingEnd else { return "展示を終了しますか？" }
+        return "「\(ticketPendingEnd.title)」の展示を終了しますか？"
+    }
+
+    /// 削除候補の有無と確認ダイアログの表示状態を連動させます。
+    private var endExhibitionDialogBinding: Binding<Bool> {
+        Binding(
+            get: { ticketPendingEnd != nil },
+            set: { isPresented in
+                if !isPresented {
+                    ticketPendingEnd = nil
+                }
+            }
+        )
+    }
+
+    /// 確認された展示だけをSwiftDataから削除します。
+    private func endPendingExhibition() {
+        guard let ticket = ticketPendingEnd else { return }
+        guard let record = records.first(where: {
+            String(describing: $0.persistentModelID) == ticket.id
+        }) else {
+            ticketPendingEnd = nil
+            return
+        }
+
+        modelContext.delete(record)
+
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+        }
+
+        ticketPendingEnd = nil
     }
 
     /// 展示説明画面からホーム画面へ戻るときに、遷移用の状態を元に戻します。
@@ -544,6 +608,109 @@ struct ContentView: View {
                 publishedAt: record.publishedAt
             )
         }
+    }
+}
+
+/// 展示がまだないときに、最初の展示作成を案内します。
+struct EmptyMuseumView: View {
+    let onCreate: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            VStack(spacing: 18) {
+                Text("まだ展示がありません")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Text("あなたの写真で、はじめての\n写真展を作ってみましょう")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(9)
+            }
+
+            Spacer()
+
+            CreateExhibitionButton(title: "最初の展示を作る", action: onCreate)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// ホーム画面下部に表示する展示作成ボタンです。
+struct CreateExhibitionButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: "plus")
+                    .font(.system(size: 28, weight: .regular))
+
+                Text(title)
+                    .font(.title3.weight(.bold))
+            }
+            .foregroundStyle(Color(red: 0.12, green: 0.09, blue: 0.06))
+            .frame(maxWidth: .infinity)
+            .frame(height: 68)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.96, green: 0.84, blue: 0.62),
+                        Color(red: 0.84, green: 0.68, blue: 0.42)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(.white.opacity(0.42), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 18, y: 9)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+}
+
+/// 通常タップと長押しを競合させず、チケット操作を判定します。
+struct InteractiveMuseumTicket: View {
+    let ticket: ExhibitionTicket
+    let onTap: () -> Void
+    let onLongPress: () -> Void
+
+    @State private var feedbackTrigger = 0
+
+    var body: some View {
+        TicketView(ticket: ticket)
+            .contentShape(Rectangle())
+            .gesture(ticketGesture)
+            .sensoryFeedback(.impact(weight: .medium), trigger: feedbackTrigger)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                onTap()
+            }
+    }
+
+    /// 約0.55秒の長押しと通常タップを、どちらか一方だけ実行します。
+    private var ticketGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.55, maximumDistance: 20)
+            .exclusively(before: TapGesture())
+            .onEnded { result in
+                switch result {
+                case .first:
+                    feedbackTrigger += 1
+                    onLongPress()
+
+                case .second:
+                    onTap()
+                }
+            }
     }
 }
 
